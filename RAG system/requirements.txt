@@ -1,0 +1,6 @@
+google-generativeai
+pypdf
+numpy
+python-dotenv
+streamlit
+Pillow
