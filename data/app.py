@@ -139,15 +139,15 @@ if prompt := st.chat_input("Ask a calculus question..."):
             st.image(img_data, caption="Uploaded Image", width=400)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                # Retrieve multimodal context (page info)
+        try:
+            # Retrieve multimodal context (page info)
+            with st.spinner("Searching textbook..."):
                 retrieved_items = rag_core.retrieve_context_multimodal(prompt)
-                
-                # Generate answer using high-res page images
-                response = rag_core.generate_answer(prompt, retrieved_items, img_data)
-                
-                st.markdown(response)
-                messages.append({"role": "assistant", "content": response})
-            except Exception as e:
-                st.error(f"Error: {e}")
+            
+            # Generate answer using high-res page images (streaming)
+            stream = rag_core.generate_answer(prompt, retrieved_items, img_data)
+            full_response = st.write_stream(stream)
+            
+            messages.append({"role": "assistant", "content": full_response})
+        except Exception as e:
+            st.error(f"Error: {e}")

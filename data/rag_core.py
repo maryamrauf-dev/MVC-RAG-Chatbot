@@ -26,11 +26,19 @@ def get_api_key():
     return api_key
 
 def configure_api():
-    genai.configure(api_key=get_api_key())
+    # Use client_options to explicitly set the stable v1 API version
+    from google.api_core import client_options
+    options = client_options.ClientOptions(api_version='v1')
+    genai.configure(api_key=get_api_key(), transport='rest', client_options=options)
+
+# Configure once at module level
+try:
+    configure_api()
+except Exception as e:
+    print(f"Initial API configuration failed: {e}")
 
 def get_embedding(text: str) -> List[float]:
     """Gemini API method for embeddings"""
-    configure_api()
     try:
         result = genai.embed_content(
             model="models/text-embedding-004",
@@ -44,7 +52,6 @@ def get_embedding(text: str) -> List[float]:
 
 def get_query_embedding(query: str) -> List[float]:
     """Gemini API method for query embeddings"""
-    configure_api()
     try:
         result = genai.embed_content(
             model="models/text-embedding-004",
@@ -97,18 +104,28 @@ class SimpleLocalVectorStore:
         scores.sort(key=lambda x: x[0], reverse=True)
         return [score_item[1] for score_item in scores[:k]]
 
+_PDF_DOC = None
+
+def get_pdf_doc():
+    global _PDF_DOC
+    if _PDF_DOC is None:
+        if not os.path.exists(PDF_PATH):
+            return None
+        _PDF_DOC = fitz.open(PDF_PATH)
+    return _PDF_DOC
+
 def extract_page_as_image(page_index: int, dpi: int = 150) -> Image.Image:
     """Extract a specific page from the PDF as a PIL Image"""
-    doc = fitz.open(PDF_PATH)
+    doc = get_pdf_doc()
+    if doc is None:
+        raise FileNotFoundError(f"PDF missing at {PDF_PATH}")
     page = doc[page_index]
     pix = page.get_pixmap(matrix=fitz.Matrix(dpi/72, dpi/72))
     img_data = pix.tobytes("png")
-    doc.close()
     return Image.open(io.BytesIO(img_data))
 
 def get_page_description_vision(image: Image.Image) -> str:
     """Use Gemini Vision to extract text and keywords from a page image"""
-    configure_api()
     model = genai.GenerativeModel('gemini-2.5-flash')
     prompt = "Extract all text, mathematical formulas, theorems, and exercise numbers from this calculus textbook page. Be very detailed so this content can be used for a search index."
     
@@ -134,7 +151,7 @@ def build_knowledge_base(progress_callback=None):
     total_pages = len(doc)
     doc.close()
     
-    store = SimpleLocalVectorStore()
+    store = get_vector_store()
     
     # We index page by page
     for i in range(total_pages):
@@ -170,19 +187,27 @@ def load_knowledge_base():
         return [{"status": "ready"}]
     return []
 
+# Global vector store instance for caching
+_VECTOR_STORE = None
+
+def get_vector_store():
+    global _VECTOR_STORE
+    if _VECTOR_STORE is None:
+        _VECTOR_STORE = SimpleLocalVectorStore()
+    return _VECTOR_STORE
+
 def retrieve_context_multimodal(query: str, top_k: int = 2) -> List[Dict]:
     """Retrieve relevant page descriptions and numbers"""
-    store = SimpleLocalVectorStore()
+    store = get_vector_store()
     return store.search(query, k=top_k)
 
-def generate_answer(query: str, retrieved_items: List[Dict], user_image=None) -> str:
+def generate_answer(query: str, retrieved_items: List[Dict], user_image=None):
     """
-    Final Answer Generation:
+    Final Answer Generation (Streaming):
     1. Take the top retrieved pages.
     2. Extract HIGH-RES images of those pages.
     3. Send images + query to Gemini for the actual book-based answer.
     """
-    configure_api()
     model = genai.GenerativeModel('gemini-2.5-flash')
     
     content_to_send = [f"User Query: {query}\n\nI have retrieved the following relevant pages from the 'Thomas Finney Calculus' textbook. Use these images to answer the query accurately following the book's methods."]
@@ -200,7 +225,9 @@ def generate_answer(query: str, retrieved_items: List[Dict], user_image=None) ->
         content_to_send.append(user_image)
         
     try:
-        response = model.generate_content(content_to_send)
-        return response.text
+        response = model.generate_content(content_to_send, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
     except Exception as e:
-        return f"Error generating answer: {e}"
+        yield f"Error generating answer: {e}"
