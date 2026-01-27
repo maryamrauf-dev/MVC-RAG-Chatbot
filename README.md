@@ -80,7 +80,7 @@ mvc-master-rag-chatbot/
 
 5. **Run the application**:
    ```bash
-   streamlit run app.py
+   streamlit run data/app.py
    ```
 
 ---
